@@ -1,5 +1,7 @@
 pytest
-torch == 1.12.1+cu116	
+torch == 1.12.1	
 torch-geometric	== 2.2.0
 pandas == 1.4.4	
 scikit-learn == 1.2.0
+networkx==2.5
+matplotlib == 3.5.2
