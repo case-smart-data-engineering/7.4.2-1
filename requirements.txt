@@ -4,7 +4,7 @@ pandas == 1.4.4
 scikit-learn == 1.2.0
 networkx==2.5
 matplotlib == 3.5.2
-torch-sparse ==	0.6.15
-torch-scatter == 2.1.0
 torch-cluster == 1.6.0
 torch-geometric	== 2.2.0
+torch-scatter == 2.1.0
+torch-sparse ==	0.6.15
