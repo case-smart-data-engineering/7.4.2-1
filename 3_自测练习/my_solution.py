@@ -91,6 +91,7 @@ def main():#训练、测试、验证的过程
     best_val_auc = test_auc = 0
     for epoch in range(1, 101):#训练周期，自测
         loss = train(data, model, optimizer)
+        result = Test(data, model)
         val_auc = result[1]
         tmp_test_auc = result[0]
         if val_auc > best_val_auc:
