@@ -71,4 +71,4 @@ if __name__ == '__main__':
     predict.load_model_adj(config_path)
     adj_orig, adj_rec = predict.predict()
     adj_rec = (adj_rec > 0.5) + 0
-    print('adj_orig: {}, \n adj_rec: {}'.format(adj_orig, adj_rec[0][:10]))
+    print('原始邻接矩阵: {}, \n 重构邻接矩阵c: {}'.format(adj_orig, adj_rec[0][:10]))

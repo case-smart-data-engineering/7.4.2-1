@@ -20,7 +20,6 @@ class GraphConvolution(nn.Module):
         nn.init.xavier_uniform_(self.weight)
 
     def forward(self, input, adj):
-        # inputs: (N, n_channels), adj: sparse_matrix (N, N)
         input = self.dropout(input)
         support = torch.mm(input, self.weight)
         output = torch.spmm(adj, support)
@@ -56,9 +55,7 @@ class GCNModelVAE(nn.Module):
         return self.ip(z), mu, logvar
 
 class InnerProductDecoder(nn.Module):
-    '''
-    内积用来做decoder，用来生成邻接矩阵
-    '''
+
     def __init__(self, dropout):
         super(InnerProductDecoder, self).__init__()
         self.dropout = nn.Dropout(dropout)
