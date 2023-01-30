@@ -6,13 +6,12 @@ import os
 from configparser import ConfigParser
 
 import sys
-sys.path.append(r'C:\Users\86139\Desktop\Learning File\链接预测\基于GCN的链接预测\gnn4lp-master\gnn4lp-master')
-
-from src.util.load_data import load_data_with_features, load_data_without_features, sparse_to_tuple, mask_test_edges, preprocess_graph
-from src.util.loss import gae_loss_function, vgae_loss_function
-from src.util.metrics import get_roc_score
-from src.util import define_optimizer
-from src.vgae.model import GCNModelVAE
+sys.path.append(r'/workspace/7.4.2-1/1_算法示例/')
+from util.load_data import load_data_with_features, load_data_without_features, sparse_to_tuple, mask_test_edges, preprocess_graph
+from util.loss import gae_loss_function, vgae_loss_function
+from util.metrics import get_roc_score
+from util import define_optimizer
+from vgae.model import GCNModelVAE
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -23,27 +22,27 @@ class Train():
     def train_model(self, config_path):
         if os.path.exists(config_path) and (os.path.split(config_path)[1].split('.')[0] == 'config') and (
                 os.path.splitext(config_path)[1].split('.')[1] == 'cfg'):
-            # load config file
+            # 加载配置文件
             config = ConfigParser()
             config.read(config_path,encoding='utf-8')
             section = config.sections()[0]
 
-            # data catalog path
+            # 数据存储目录
             data_catalog = config.get(section, "data_catalog")
 
-            # node cites path
+            # 节点路径
             node_cites_path = config.get(section, "node_cites_path")
             node_cites_path = os.path.join(data_catalog, node_cites_path)
 
-            # node features path
+            # 节点特征路径
             node_features_path = config.get(section, 'node_features_path')
             node_features_path = os.path.join(data_catalog, node_features_path)
 
-            # model save/load path
+            # 训练结果存储位置和加载模型结果
             model_path = config.get(section, "model_path")
 
-            # model param config
-            with_feats = config.getboolean(section, 'with_feats') # 是否带有节点特征
+            # 模型默认参数
+            with_feats = config.getboolean(section, 'with_feats') 
             hidden_dim1 = config.getint(section, "hidden_dim1")
             hidden_dim2 = config.getint(section, "hidden_dim2")
             dropout = config.getfloat(section, "dropout")
@@ -85,12 +84,6 @@ class Train():
             adj_label = adj_train + sp.eye(adj_train.shape[0])
             # adj_label = sparse_to_tuple(adj_label)
             adj_label = torch.FloatTensor(adj_label.toarray()).to(DEVICE)
-            '''
-            注意，adj的每个元素非1即0。pos_weight是用于训练的邻接矩阵中负样本边（既不存在的边）和正样本边的倍数（即比值），这个数值在二分类交叉熵损失函数中用到，
-            如果正样本边所占的比例和负样本边所占比例失衡，比如正样本边很多，负样本边很少，那么在求loss的时候可以提供weight参数，将正样本边的weight设置小一点，负样本边的weight设置大一点，
-            此时能够很好的平衡两类在loss中的占比，任务效果可以得到进一步提升。参考：https://www.zhihu.com/question/383567632
-            负样本边的weight都为1，正样本边的weight都为pos_weight
-            '''
             pos_weight = float(adj.shape[0] * adj.shape[0] - num_edges) / num_edges
             norm = adj.shape[0] * adj.shape[0] / float((adj.shape[0] * adj.shape[0] - adj.sum()) * 2)
 
