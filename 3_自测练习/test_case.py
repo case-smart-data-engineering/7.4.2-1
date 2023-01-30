@@ -60,7 +60,10 @@ class Predict():
     def predict(self): #内积重构邻接矩阵
         def sigmoid(x):
             return 1 / (1 + np.exp(-x))
-        # 补充重构矩阵的内积方式
+            
+        '''
+        补充重构矩阵的内积方式
+        '''
         
         return self.adj_orig, adj_rec
 
