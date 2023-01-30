@@ -1,111 +1,178 @@
-#!/usr/bin/env python3
-
-import os.path as osp
-from torch_geometric.utils import negative_sampling
-from torch_geometric.datasets import Planetoid
-import torch_geometric.transforms as T
-from torch_geometric.utils import train_test_split_edges
+import scipy.sparse as sp
+import numpy as np
 import torch
-from torch_geometric.nn import GCNConv
-import torch.nn.functional as F
-from sklearn.metrics import roc_auc_score, average_precision_score
-import pandas as pd
+import time
+import os
+from configparser import ConfigParser
 
+import sys
+sys.path.append(r'/workspace/7.4.2-1/1_算法示例/')
+from util.load_data import load_data_with_features, load_data_without_features, sparse_to_tuple, mask_test_edges, preprocess_graph
+from util.loss import gae_loss_function, vgae_loss_function
+from util.metrics import get_roc_score
+from util import define_optimizer
+from gae.model import GCNModelVAE
 
+DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-class Net(torch.nn.Module):#构建神经网络模型
-    def __init__(self, in_channels, out_channels):
-        super(Net, self).__init__()
-        self.conv1 = GCNConv(in_channels, 128)
-        self.conv2 = GCNConv(128, out_channels)
-    def encode(self, x, edge_index):
-        x = self.conv1(x, edge_index)
-        x = x.relu()
-        return self.conv2(x, edge_index)
-    def decode(self, z, pos_edge_index, neg_edge_index):
-        edge_index = torch.cat([pos_edge_index, neg_edge_index], dim=-1)
-        return (z[edge_index[0]] * z[edge_index[1]]).sum(dim=-1)# 头尾节点属性对应相乘后求和 返回一个 [(正样本数+负样本数),1] 的向量
-    def decode_all(self, z):
-        prob_adj = z @ z.t()# 头节点属性和尾节点属性对应相乘后求和，[节点数，节点数]
-        return (prob_adj > 0).nonzero(as_tuple=False).t()
+class Train():
+    def __init__(self):
+        pass
 
-# 生成正负样本边的标记
-def get_link_labels(pos_edge_index, neg_edge_index):
-    num_links = pos_edge_index.size(1) + neg_edge_index.size(1)
-    link_labels = torch.zeros(num_links, dtype=torch.float)
-    link_labels[:pos_edge_index.size(1)] = 1.
-    return link_labels
+    def train_model(self, config_path):
+        if os.path.exists(config_path) and (os.path.split(config_path)[1].split('.')[0] == 'config') and (
+                os.path.splitext(config_path)[1].split('.')[1] == 'cfg'):
+            # 加载配置文件
+            config = ConfigParser()
+            config.read(config_path,encoding='utf-8')
+            section = config.sections()[0]
 
-#训练
-def train(data, model, optimizer):
-    model.train()
-    #正负采样
-    neg_edge_index = negative_sampling(
-        edge_index=data.train_pos_edge_index,
-        num_nodes=data.num_nodes,
-        num_neg_samples=data.train_pos_edge_index.size(1))
-    optimizer.zero_grad()
-    # 节点representation learning
-    z = model.encode(data.x, data.train_pos_edge_index)
-    link_logits = model.decode(z, data.train_pos_edge_index, neg_edge_index)
-    link_labels = get_link_labels(data.train_pos_edge_index, neg_edge_index).to(data.x.device)
-    #损失计算
-    loss = F.binary_cross_entropy_with_logits(link_logits, link_labels)
-    loss.backward()
-    optimizer.step()
+            # 数据存储目录
+            data_catalog = config.get(section, "data_catalog")
 
-    return loss
+            # 节点路径
+            node_cites_path = config.get(section, "node_cites_path")
+            node_cites_path = os.path.join(data_catalog, node_cites_path)
 
-@torch.no_grad()
-def Test(data, model):#定义单个epoch训练和测试过程
-    model.eval()
+            # 节点特征路径
+            node_features_path = config.get(section, 'node_features_path')
+            node_features_path = os.path.join(data_catalog, node_features_path)
 
-    z = model.encode(data.x, data.train_pos_edge_index)
+            # 训练结果存储位置和加载模型结果
+            model_path = config.get(section, "model_path")
 
-    results = []
-    for prefix in ['val', 'test']:
-        pos_edge_index = data[f'{prefix}_pos_edge_index']#正edge_index
-        neg_edge_index = data[f'{prefix}_neg_edge_index']#负edge_index
-        link_logits = model.decode(z, pos_edge_index, neg_edge_index)#有无边的概率预测
-        link_probs = link_logits.sigmoid()
-        link_labels = get_link_labels(pos_edge_index, neg_edge_index)#真实有边的结点标签
-        results.append(roc_auc_score(link_labels.cpu(), link_probs.cpu()))
-        results.append(average_precision_score(link_labels.cpu(), link_probs.cpu()))
-    return results
+            # 模型默认参数
+            with_feats = config.getboolean(section, 'with_feats') 
+            hidden_dim1 = config.getint(section, "hidden_dim1")
+            hidden_dim2 = config.getint(section, "hidden_dim2")
+            dropout = config.getfloat(section, "dropout")
+            vae_bool = config.getboolean(section, 'vae_bool')
+            lr = config.getfloat(section, "lr")
+            lr_decay = config.getfloat(section, 'lr_decay')
+            weight_decay = config.getfloat(section, "weight_decay")
+            gamma = config.getfloat(section, "gamma")
+            momentum = config.getfloat(section, "momentum")
+            eps = config.getfloat(section, "eps")
+            clip = config.getfloat(section, "clip")
+            epochs = config.getint(section, "epochs")
+            optimizer_name = config.get(section, "optimizer")
 
+            if with_feats:
+                # 加载带节点特征的数据集
+                adj, features = load_data_with_features(node_cites_path, node_features_path)
+            else:
+                # 加载不带节点特征的数据集
+                adj = load_data_without_features(node_cites_path)
+                features = sp.identity(adj.shape[0])
+            num_nodes = adj.shape[0]
+            num_edges = adj.sum()
 
-def main():#训练、测试、验证的过程
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    dataset = 'cora'  # 获取数据集并进行处理
-    path = osp.join(osp.dirname(osp.realpath(__file__)))
-    dataset = Planetoid(path, dataset, transform=T.NormalizeFeatures())
-    data = dataset[0]
-    data.train_mask = data.val_mask = data.test_mask = data.y = None
-    data = train_test_split_edges(data)
-    dataset[0].edge_index.to(device)
-    data = data.to(device)
-    model = Net(dataset.num_features, 64).to(device)
-    optimizer = torch.optim.Adam(params=model.parameters(), lr=0.01)
-    df = pd.DataFrame(columns=["Val", "Test", "Best_val"])
-    df.index.name = "Epoch"
-    best_val_auc = test_auc = 0
-    for epoch in range(1, 101):#训练周期，自测
-        loss = train(data, model, optimizer)
-        result = Test(data, model)
-        val_auc = result[1]
-        tmp_test_auc = result[0]
-        if val_auc > best_val_auc:
-            best_val_auc = val_auc
-            test_auc = tmp_test_auc
-        df.loc[epoch, "Val"] = val_auc
-        df.loc[epoch, "Test"] = test_auc
-        df.loc[epoch, "Best_val"] = best_val_auc
-        print(f'Epoch: {epoch:03d}, Loss: {loss:.4f}, Val: {val_auc:.4f}, '
-              f'Test: {test_auc:.4f}')
-    z = model.encode(data.x, data.train_pos_edge_index)
-    print(model.decode_all(z))
+            features = sparse_to_tuple(features)
+            num_features = features[2][1]
 
+            # 去除对角线元素
+            # adj_orig = adj - sp.dia_matrix((adj.diagonal()[np.newaxis, :], [0]), shape=adj.shape)
+            # adj_orig.eliminate_zeros()
 
+            adj_train, train_edges, val_edges, val_edges_false, test_edges, test_edges_false = mask_test_edges(adj_orig)
 
-if __name__ == "__main__":
-    main()
+            adj = adj_train
+
+            adj_norm = preprocess_graph(adj)
+            adj_label = adj_train + sp.eye(adj_train.shape[0])
+            adj_label = torch.FloatTensor(adj_label.toarray()).to(DEVICE)
+            pos_weight = float(adj.shape[0] * adj.shape[0] - num_edges) / num_edges
+            norm = adj.shape[0] * adj.shape[0] / float((adj.shape[0] * adj.shape[0] - adj.sum()) * 2)
+
+            # 创建模型
+            print('create model ...')
+            model = GCNModelVAE(num_features, hidden_dim1=hidden_dim1, hidden_dim2=hidden_dim2, dropout=dropout, vae_bool=vae_bool)
+
+            # 定义优化器
+            if optimizer_name == 'adam':
+                optimizer = define_optimizer.define_optimizer_adam(model, lr=lr, weight_decay=weight_decay)
+
+            elif optimizer_name == 'adamw':
+                optimizer = define_optimizer.define_optimizer_adamw(model, lr=lr, weight_decay=weight_decay)
+
+            elif optimizer_name == 'sgd':
+                optimizer = define_optimizer.define_optimizer_sgd(model, lr=lr, momentum=momentum,
+                                                                  weight_decay=weight_decay)
+
+            elif optimizer_name == 'adagrad':
+                optimizer = define_optimizer.define_optimizer_adagrad(model, lr=lr, lr_decay=lr_decay,
+                                                                      weight_decay=weight_decay)
+
+            elif optimizer_name == 'rmsprop':
+                optimizer = define_optimizer.define_optimizer_rmsprop(model, lr=lr, weight_decay=weight_decay,
+                                                                      momentum=momentum)
+
+            elif optimizer_name == 'adadelta':
+                optimizer = define_optimizer.define_optimizer_adadelta(model, lr=lr, weight_decay=weight_decay)
+
+            else:
+                raise NameError('No define optimization function name!')
+
+            model = model.to(DEVICE)
+            # 稀疏张量被表示为一对致密张量：一维张量和二维张量的索引。可以通过提供这两个张量来构造稀疏张量
+            adj_norm = torch.sparse.FloatTensor(torch.LongTensor(adj_norm[0].T),
+                                                torch.FloatTensor(adj_norm[1]),
+                                                torch.Size(adj_norm[2]))
+            features = torch.sparse.FloatTensor(torch.LongTensor(features[0].T),
+                                                torch.FloatTensor(features[1]),
+                                                torch.Size(features[2])).to_dense()
+            adj_norm = adj_norm.to(DEVICE)
+            features = features.to(DEVICE)
+            norm = torch.FloatTensor(np.array(norm)).to(DEVICE)
+            pos_weight = torch.tensor(pos_weight).to(DEVICE)
+            num_nodes = torch.tensor(num_nodes).to(DEVICE)
+
+            print('start training...')
+            best_valid_roc_score = float('-inf')
+            hidden_emb = None
+            model.train()
+            for epoch in range(epochs):
+                t = time.time()
+                optimizer.zero_grad()
+                recovered, mu, logvar = model(features, adj_norm)
+                if vae_bool:
+                    loss = vgae_loss_function(preds=recovered, labels=adj_label,
+                                              mu=mu, logvar=logvar, n_nodes=num_nodes,
+                                              norm=norm, pos_weight=pos_weight)
+                else:
+                    loss = gae_loss_function(preds=recovered, labels=adj_label, norm=norm, pos_weight=pos_weight)
+
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
+                cur_loss = loss.item()
+                optimizer.step()
+
+                hidden_emb = mu.data.cpu().numpy()
+                # 评估验证集，val set
+                roc_score, ap_score = get_roc_score(hidden_emb, adj_orig, val_edges, val_edges_false)
+                # 保存最好的roc score
+                if roc_score > best_valid_roc_score:
+                    best_valid_roc_score = roc_score
+                    # 不需要保存整个model，只需保存hidden_emb，因为后面的解码是用hidden_emb内积的形式作推断
+                    np.save(model_path, hidden_emb)
+
+                print("Epoch:", '%04d' % (epoch + 1), "train_loss = ", "{:.5f}".format(cur_loss),
+                      "val_roc_score = ", "{:.5f}".format(roc_score),
+                      "average_precision_score = ", "{:.5f}".format(ap_score),
+                      "time=", "{:.5f}".format(time.time() - t)
+                      )
+
+            print("Optimization Finished!")
+
+            # 评估测试集，test set
+            roc_score, ap_score = get_roc_score(hidden_emb, adj_orig, test_edges, test_edges_false)
+            print('test roc score: {}'.format(roc_score))
+            print('test ap score: {}'.format(ap_score))
+
+        else:
+            raise FileNotFoundError('File config.cfg not found : ' + config_path)
+
+if __name__ == '__main__':
+    config_path = os.path.join('/workspace/7.4.2-1/1_算法示例/gae/', 'config.cfg')
+    train = Train()
+    train.train_model(config_path)

@@ -71,7 +71,6 @@ class Train():
             num_features = features[2][1]
 
             # 去除对角线元素
-            # 下边的右部分为：返回adj_orig的对角元素（一维），并增加一维，抽出adj_orig的对角元素并构建只有这些对角元素的对角矩阵
             adj_orig = adj - sp.dia_matrix((adj.diagonal()[np.newaxis, :], [0]), shape=adj.shape)
             adj_orig.eliminate_zeros()
 
@@ -79,19 +78,17 @@ class Train():
 
             adj = adj_train
 
-            # 返回D^{-0.5}SD^{-0.5}的coords, data, shape，其中S=A+I
             adj_norm = preprocess_graph(adj)
             adj_label = adj_train + sp.eye(adj_train.shape[0])
-            # adj_label = sparse_to_tuple(adj_label)
             adj_label = torch.FloatTensor(adj_label.toarray()).to(DEVICE)
             pos_weight = float(adj.shape[0] * adj.shape[0] - num_edges) / num_edges
             norm = adj.shape[0] * adj.shape[0] / float((adj.shape[0] * adj.shape[0] - adj.sum()) * 2)
 
-            # create model
+            # 创建模型
             print('create model ...')
             model = GCNModelVAE(num_features, hidden_dim1=hidden_dim1, hidden_dim2=hidden_dim2, dropout=dropout, vae_bool=vae_bool)
 
-            # define optimizer
+            # 定义优化器
             if optimizer_name == 'adam':
                 optimizer = define_optimizer.define_optimizer_adam(model, lr=lr, weight_decay=weight_decay)
 
