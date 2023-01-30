@@ -11,7 +11,7 @@ from util.load_data import load_data_with_features, load_data_without_features, 
 from util.loss import gae_loss_function, vgae_loss_function
 from util.metrics import get_roc_score
 from util import define_optimizer
-from vgae.model import GCNModelVAE
+from gae.model import GCNModelVAE
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 

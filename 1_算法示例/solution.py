@@ -66,9 +66,9 @@ class Predict():
         return self.adj_orig, adj_rec
 
 if __name__ == '__main__':
-    config_path = os.path.join('/workspace/7.4.2-1/1_算法示例/vgae/', 'config.cfg')
+    config_path = os.path.join('/workspace/7.4.2-1/1_算法示例/gae/', 'config.cfg')
     predict = Predict()
     predict.load_model_adj(config_path)
     adj_orig, adj_rec = predict.predict()
     adj_rec = (adj_rec > 0.5) + 0
-    print('原始邻接矩阵: {}, \n 重构邻接矩阵c: {}'.format(adj_orig, adj_rec[0][:10]))
+    print('原始邻接矩阵: {}, \n 重构邻接矩阵: {}'.format(adj_orig, adj_rec[0][:50]))
